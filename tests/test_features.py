@@ -4,7 +4,7 @@ import pandas as pd
 from app.features import FEATURE_COLUMNS, add_features, latest_rows, training_rows
 
 
-def sample_market(rows: int = 100) -> pd.DataFrame:
+def sample_market(rows: int = 160) -> pd.DataFrame:
     dates = pd.date_range("2025-01-01", periods=rows, freq="B")
     close = pd.Series(100 * np.cumprod(np.repeat(1.002, rows)), index=dates)
     frame = pd.DataFrame(
