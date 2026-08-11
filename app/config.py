@@ -1,7 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     max_portfolio_risk_pct: float = Field(default=0.02, gt=0, le=0.25)
     transaction_cost_bps: float = Field(default=10.0, ge=0, le=1000)
     allow_live_trading: bool = False
+    max_portfolio_positions: int = Field(default=7, ge=1, le=25)
+    tinvest_token: SecretStr | None = None
+    tinvest_account_id: str | None = None
+    tinvest_sandbox: bool = True
 
 
 @lru_cache
