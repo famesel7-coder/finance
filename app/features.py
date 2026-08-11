@@ -11,6 +11,10 @@ FEATURE_COLUMNS = [
     "volume_ratio_20d",
     "rsi_14d",
     "atr_pct_14d",
+    "trend_consistency_20d",
+    "downside_volatility_20d",
+    "breakout_60d",
+    "value_traded_ratio_20d",
 ]
 
 
@@ -53,6 +57,14 @@ def add_features(
             axis=1,
         ).max(axis=1)
         data["atr_pct_14d"] = true_range.rolling(14).mean() / close
+        data["trend_consistency_20d"] = (
+            daily.gt(0).rolling(20).mean() - daily.lt(0).rolling(20).mean()
+        )
+        downside = daily.where(daily < 0, 0)
+        data["downside_volatility_20d"] = downside.rolling(20).std() * np.sqrt(252)
+        data["breakout_60d"] = close / close.rolling(60).max() - 1
+        traded_value = close * data["volume"]
+        data["value_traded_ratio_20d"] = traded_value / traded_value.rolling(20).mean()
         data["forward_return"] = close.shift(-horizon) / close - 1
         data["target"] = (data["forward_return"] >= target_return).astype(int)
         data["ticker"] = ticker
