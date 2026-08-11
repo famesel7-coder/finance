@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Аналитическая панель акций Московской биржи" />
+    <title>Finance Radar — аналитика акций MOEX</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="ambient ambient-one"></div>
+    <div class="ambient ambient-two"></div>
+    <main class="shell">
+      <header class="topbar">
+        <a class="brand" href="/">
+          <span class="brand-mark">FR</span>
+          <span>Finance Radar</span>
+        </a>
+        <div class="market-state"><span></span> MOEX · дневные данные</div>
+      </header>
+
+      <section class="hero">
+        <div>
+          <p class="eyebrow">КОЛИЧЕСТВЕННАЯ АНАЛИТИКА</p>
+          <h1>Найдите сильные акции.<br /><em>Проверьте идею цифрами.</em></h1>
+          <p class="lede">
+            Сервис оценивает импульс, риск и ликвидность российских компаний,
+            а затем собирает модельный портфель на короткий горизонт.
+          </p>
+        </div>
+        <aside class="notice">
+          <span class="notice-icon">!</span>
+          <p><strong>Это аналитическая модель.</strong> Прогноз не гарантирует прибыль и не является индивидуальной инвестиционной рекомендацией.</p>
+        </aside>
+      </section>
+
+      <section class="control-panel panel">
+        <label>
+          <span>Капитал, ₽</span>
+          <input id="capital" type="number" min="1000" step="1000" value="500000" />
+        </label>
+        <label>
+          <span>Профиль риска</span>
+          <select id="risk-profile">
+            <option value="conservative">Осторожный</option>
+            <option value="balanced" selected>Сбалансированный</option>
+            <option value="aggressive">Агрессивный</option>
+          </select>
+        </label>
+        <label>
+          <span>Период данных</span>
+          <select id="period">
+            <option value="1y">1 год</option>
+            <option value="2y" selected>2 года</option>
+            <option value="5y">5 лет</option>
+          </select>
+        </label>
+        <label>
+          <span>Количество бумаг</span>
+          <select id="top-n">
+            <option value="5">5</option>
+            <option value="7" selected>7</option>
+            <option value="10">10</option>
+          </select>
+        </label>
+        <button id="analyze" class="primary">Провести анализ <span>→</span></button>
+      </section>
+
+      <div id="status" class="status" aria-live="polite"></div>
+
+      <section id="results" class="results hidden">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">РЕЙТИНГ МОДЕЛИ</p>
+            <h2>Кандидаты для изучения</h2>
+          </div>
+          <p id="horizon" class="meta"></p>
+        </div>
+        <div class="table-wrap panel">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Компания</th>
+                <th>Сектор</th>
+                <th>Оценка роста</th>
+                <th>Цена</th>
+                <th>Волатильность</th>
+                <th>Факторы</th>
+              </tr>
+            </thead>
+            <tbody id="signals-body"></tbody>
+          </table>
+        </div>
+
+        <div class="section-head portfolio-head">
+          <div>
+            <p class="eyebrow">РАСПРЕДЕЛЕНИЕ КАПИТАЛА</p>
+            <h2>Модельный портфель</h2>
+          </div>
+          <button id="backtest" class="secondary">Проверить на истории</button>
+        </div>
+        <div class="portfolio-grid">
+          <div class="allocation panel">
+            <div class="donut" id="donut"><span id="invested-pct">0%</span></div>
+            <div>
+              <p>В бумагах</p>
+              <strong id="invested">—</strong>
+              <p>Резерв</p>
+              <strong id="reserve">—</strong>
+            </div>
+          </div>
+          <div id="positions" class="positions panel"></div>
+        </div>
+
+        <div id="backtest-result" class="backtest-result panel hidden"></div>
+      </section>
+
+      <section class="broker panel">
+        <div>
+          <p class="eyebrow">ИСПОЛНЕНИЕ И ВЫВОД</p>
+          <h2>Контур Т‑Инвест</h2>
+          <p id="broker-copy">Проверяем конфигурацию брокера…</p>
+        </div>
+        <div id="broker-badge" class="broker-badge">Не настроен</div>
+        <div class="withdrawal">
+          <strong>Вывод средств</strong>
+          <p>API показывает доступный лимит, но сам вывод выполняется вручную в приложении или личном кабинете Т‑Банка.</p>
+          <a href="https://www.tbank.ru/invest/" target="_blank" rel="noreferrer">Открыть Т‑Инвестиции ↗</a>
+        </div>
+      </section>
+
+      <footer>
+        <p>Finance Radar · исследовательский инструмент</p>
+        <a href="/docs">Документация API</a>
+      </footer>
+    </main>
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>
