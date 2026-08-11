@@ -66,6 +66,29 @@ class GrowthModel:
             return heuristic_probability(rows)
         return self.model.predict_proba(rows[FEATURE_COLUMNS])[:, 1]
 
+    def out_of_sample_predictions(
+        self,
+        rows: pd.DataFrame,
+        train_fraction: float = 0.70,
+        embargo_dates: int = 10,
+    ) -> pd.DataFrame:
+        ordered = rows.reset_index().sort_values(["date", "ticker"]).copy()
+        unique_dates = ordered["date"].drop_duplicates().sort_values().tolist()
+        split_index = max(1, min(len(unique_dates) - 1, int(len(unique_dates) * train_fraction)))
+        split_date = unique_dates[split_index]
+        train_end_index = max(1, split_index - embargo_dates)
+        train_end_date = unique_dates[train_end_index]
+        train = ordered[ordered["date"] < train_end_date]
+        test = ordered[ordered["date"] >= split_date].copy()
+        if len(train) < 150 or len(test) < 30:
+            raise ValueError("Not enough history for an out-of-sample backtest")
+        if train["target"].nunique() < 2:
+            raise ValueError("Backtest training target contains only one class")
+        model = self._new_model()
+        model.fit(train[FEATURE_COLUMNS], train["target"].astype(int))
+        test["probability"] = model.predict_proba(test[FEATURE_COLUMNS])[:, 1]
+        return test
+
     @staticmethod
     def _new_model() -> RandomForestClassifier:
         return RandomForestClassifier(
@@ -84,9 +107,14 @@ def heuristic_probability(rows: pd.DataFrame) -> np.ndarray:
         + rows["return_10d"].clip(-0.25, 0.25) * 1.5
         + rows["return_20d"].clip(-0.40, 0.40)
         + rows["ma_gap_20d"].clip(-0.20, 0.20)
+        + rows["trend_consistency_20d"].clip(-1, 1) * 0.15
+        + rows["breakout_60d"].clip(-0.30, 0) * 0.30
     )
     volume = (rows["volume_ratio_20d"].clip(0.5, 3.0) - 1.0) * 0.10
     overbought_penalty = ((rows["rsi_14d"] - 70).clip(lower=0) / 100) * 0.8
-    risk_penalty = rows["volatility_20d"].clip(0, 1.5) * 0.20
+    risk_penalty = (
+        rows["volatility_20d"].clip(0, 1.5) * 0.12
+        + rows["downside_volatility_20d"].clip(0, 1.5) * 0.18
+    )
     raw = momentum + volume - overbought_penalty - risk_penalty
     return 1 / (1 + np.exp(-4 * raw.to_numpy()))
