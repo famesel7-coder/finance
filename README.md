@@ -86,3 +86,7 @@ pytest -q
 ## Лицензия
 
 MIT.
+
+## База знаний
+
+Исследовательские конспекты и проверяемые гипотезы: [docs/knowledge/README.md](docs/knowledge/README.md).
