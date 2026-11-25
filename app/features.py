@@ -65,7 +65,14 @@ def add_features(
         data["breakout_60d"] = close / close.rolling(60).max() - 1
         traded_value = close * data["volume"]
         data["value_traded_ratio_20d"] = traded_value / traded_value.rolling(20).mean()
-        data["forward_return"] = close.shift(-horizon) / close - 1
+        session = pd.Series(data.index, index=data.index)
+        trade_open = data["open"].astype(float).where(data["open"].astype(float).gt(0))
+        data["entry_date"] = session.shift(-1)
+        data["exit_date"] = session.shift(-horizon)
+        data["entry_price"] = trade_open.shift(-1)
+        data["forward_return"] = close.shift(-horizon).where(lambda value: value.gt(0)) / (
+            data["entry_price"]
+        ) - 1
         data["target"] = (data["forward_return"] >= target_return).astype(int)
         data["ticker"] = ticker
         parts.append(data.reset_index().set_index(["date", "ticker"]))

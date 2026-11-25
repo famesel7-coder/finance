@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from app.features import FEATURE_COLUMNS, add_features, latest_rows, training_rows
 
@@ -26,3 +27,18 @@ def test_features_have_expected_columns() -> None:
     assert set(FEATURE_COLUMNS).issubset(result.columns)
     assert len(training_rows(result)) > 40
     assert len(latest_rows(result)) == 1
+
+
+def test_signal_enters_next_session_after_a_gap() -> None:
+    market = sample_market()
+    signal = market.index.unique()[80][0]
+    following = market.index.unique()[81][0]
+    exit_date = market.index.unique()[82][0]
+    market.loc[(following, "TEST"), "open"] = 150
+    row = add_features(market, horizon=2).loc[(signal, "TEST")]
+
+    assert row["entry_date"] == following
+    assert row["exit_date"] == exit_date
+    assert row["forward_return"] == pytest.approx(
+        market.loc[(exit_date, "TEST"), "close"] / 150 - 1
+    )

@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -52,6 +54,11 @@ class PaperOrderRequest(BaseModel):
     side: str
     quantity: int = Field(gt=0)
     price: float = Field(gt=0)
+    lot_size: int = Field(default=1, gt=0)
+    available_lots: int | None = Field(default=None, ge=0)
+    order_id: str | None = Field(default=None, min_length=1, max_length=64)
+    bid: float | None = Field(default=None, gt=0)
+    ask: float | None = Field(default=None, gt=0)
 
     @field_validator("ticker")
     @classmethod
@@ -72,6 +79,7 @@ class BrokerOrderRequest(BaseModel):
     side: str
     quantity_lots: int = Field(gt=0, le=100_000)
     confirm: str | None = None
+    request_id: UUID | None = None
 
     @field_validator("ticker")
     @classmethod

@@ -1,10 +1,11 @@
 from collections.abc import Iterator
 from datetime import datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 
 from app.config import Settings
+from app.tls import system_verify
 
 
 class TInvestClient:
@@ -13,7 +14,7 @@ class TInvestClient:
 
     def __init__(self, settings: Settings, client: httpx.Client | None = None):
         self.settings = settings
-        self.client = client or httpx.Client(timeout=30)
+        self.client = client or httpx.Client(timeout=30, verify=system_verify())
 
     @property
     def configured(self) -> bool:
@@ -91,8 +92,11 @@ class TInvestClient:
             cursors.add(cursor)
             payload["cursor"] = cursor
 
-    def preview_order(self, ticker: str, side: str, quantity_lots: int) -> dict:
+    def preview_order(
+        self, ticker: str, side: str, quantity_lots: int, request_id: UUID | None = None
+    ) -> dict:
         return {
+            "request_id": str(request_id or uuid4()),
             "mode": "sandbox" if self.settings.tinvest_sandbox else "live",
             "instrument_id": f"{ticker}_TQBR",
             "side": side,
@@ -102,12 +106,16 @@ class TInvestClient:
         }
 
     def place_order(
-        self, ticker: str, side: str, quantity_lots: int, confirmation: str | None
+        self, ticker: str, side: str, quantity_lots: int, confirmation: str | None,
+        request_id: UUID | None = None,
     ) -> dict:
         if confirmation != "EXECUTE_LIVE_ORDER":
             raise ValueError("Explicit order confirmation is required")
         if not self.settings.allow_live_trading:
             raise ValueError("ALLOW_LIVE_TRADING is disabled")
+        if not self.settings.tinvest_sandbox and request_id is None:
+            raise ValueError("A request_id from the order preview is required")
+        order_id = str(request_id or uuid4())
         service = (
             "SandboxService/PostSandboxOrder"
             if self.settings.tinvest_sandbox
@@ -118,12 +126,34 @@ class TInvestClient:
             "direction": "ORDER_DIRECTION_BUY" if side == "buy" else "ORDER_DIRECTION_SELL",
             "accountId": self._account_id(),
             "orderType": "ORDER_TYPE_MARKET",
-            "orderId": str(uuid4()),
+            "orderId": order_id,
             "instrumentId": f"{ticker}_TQBR",
             "timeInForce": "TIME_IN_FORCE_DAY",
             "confirmMarginTrade": False,
         }
-        return self._post(service, payload)
+        try:
+            return {**self._post(service, payload), "request_id": order_id}
+        except (httpx.TimeoutException, httpx.NetworkError):
+            try:
+                return self.get_order_state(order_id)
+            except httpx.HTTPError:
+                return {"request_id": order_id, "status": "unknown"}
+
+    def get_order_state(self, request_id: str) -> dict:
+        service = (
+            "SandboxService/GetSandboxOrderState"
+            if self.settings.tinvest_sandbox
+            else "OrdersService/GetOrderState"
+        )
+        result = self._post(
+            service,
+            {
+                "accountId": self._account_id(),
+                "orderId": request_id,
+                "orderIdType": "ORDER_ID_TYPE_REQUEST",
+            },
+        )
+        return {**result, "request_id": request_id}
 
     def _post(self, method: str, payload: dict) -> dict:
         if not self.settings.tinvest_token:

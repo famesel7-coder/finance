@@ -13,7 +13,9 @@ class Settings(BaseSettings):
     model_path: Path = Path("artifacts/model.joblib")
     max_position_pct: float = Field(default=0.10, gt=0, le=1)
     max_portfolio_risk_pct: float = Field(default=0.02, gt=0, le=0.25)
-    transaction_cost_bps: float = Field(default=10.0, ge=0, le=1000)
+    transaction_cost_bps: float = Field(default=60.0, ge=0, le=1000)
+    execution_spread_bps: float = Field(default=10.0, ge=0, le=1000)
+    moex_ca_file: Path | None = None
     allow_live_trading: bool = False
     max_portfolio_positions: int = Field(default=7, ge=1, le=25)
     tinvest_token: SecretStr | None = None

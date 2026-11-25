@@ -1,8 +1,9 @@
 from pathlib import Path
+from uuid import UUID
 
 import httpx
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.broker import PaperBroker
@@ -22,9 +23,12 @@ from app.tinvest import TInvestClient
 from app.universe import DEFAULT_MOEX_TICKERS, public_universe
 
 settings = get_settings()
-paper_broker = PaperBroker()
+paper_broker = PaperBroker(
+    commission_bps=settings.transaction_cost_bps / 2,
+    spread_bps=settings.execution_spread_bps,
+)
 t_invest = TInvestClient(settings)
-moex_provider = MoexIssProvider()
+moex_provider = MoexIssProvider(ca_file=settings.moex_ca_file)
 yahoo_provider = YahooFinanceProvider()
 static_dir = Path(__file__).parent / "static"
 
@@ -139,7 +143,11 @@ def paper_account() -> dict:
 @app.post("/paper/orders")
 def paper_order(request: PaperOrderRequest) -> dict:
     try:
-        return paper_broker.submit(request.ticker, request.side, request.quantity, request.price)
+        return paper_broker.submit(
+            request.ticker, request.side, request.quantity, request.price,
+            lot_size=request.lot_size, available_lots=request.available_lots,
+            order_id=request.order_id, bid=request.bid, ask=request.ask,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -163,14 +171,27 @@ def broker_withdraw_limits() -> dict:
 
 @app.post("/broker/orders/preview")
 def broker_order_preview(request: BrokerOrderRequest) -> dict:
-    return t_invest.preview_order(request.ticker, request.side, request.quantity_lots)
+    return t_invest.preview_order(
+        request.ticker, request.side, request.quantity_lots, request.request_id
+    )
 
 
-@app.post("/broker/orders/execute")
-def broker_order_execute(request: BrokerOrderRequest) -> dict:
+@app.post("/broker/orders/execute", response_model=None)
+def broker_order_execute(request: BrokerOrderRequest) -> dict | JSONResponse:
     try:
-        return t_invest.place_order(
-            request.ticker, request.side, request.quantity_lots, request.confirm
+        result = t_invest.place_order(
+            request.ticker, request.side, request.quantity_lots, request.confirm, request.request_id
         )
+        if result.get("status") == "unknown":
+            return JSONResponse(status_code=202, content=result)
+        return result
+    except (ValueError, httpx.HTTPError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/broker/orders/{request_id}")
+def broker_order_status(request_id: UUID) -> dict:
+    try:
+        return t_invest.get_order_state(str(request_id))
     except (ValueError, httpx.HTTPError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

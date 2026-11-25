@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -7,7 +8,7 @@ import pytest
 from pydantic import SecretStr
 
 from app.config import Settings
-from app.portfolio_journal import summarize_journal, sync_journal
+from app.portfolio_journal import SCHEMA, daily_valuations, summarize_journal, sync_journal
 from app.tinvest import TInvestClient
 
 
@@ -41,16 +42,24 @@ def test_sync_preserves_money_and_is_idempotent_across_pages(tmp_path):
             case "OperationsService/GetOperationsByCursor":
                 assert payload["state"] == "OPERATION_STATE_EXECUTED"
                 if payload.get("cursor") == "second-page":
-                    return httpx.Response(200, json={"items": [
-                        operation("t", "DIVIDEND_TAX", "-13", -20_000_000),
-                        operation("f", "BROKER_FEE", "0", -50_000_000),
-                        operation("u", "DIVIDEND", "1", 20_000_000, currency="usd"),
-                    ]})
-                return httpx.Response(200, json={
-                    "items": [operation("d", "DIVIDEND", "100", 100_000_000)],
-                    "hasNext": True,
-                    "nextCursor": "second-page",
-                })
+                    return httpx.Response(
+                        200,
+                        json={
+                            "items": [
+                                operation("t", "DIVIDEND_TAX", "-13", -20_000_000),
+                                operation("f", "BROKER_FEE", "0", -50_000_000),
+                                operation("u", "DIVIDEND", "1", 20_000_000, currency="usd"),
+                            ]
+                        },
+                    )
+                return httpx.Response(
+                    200,
+                    json={
+                        "items": [operation("d", "DIVIDEND", "100", 100_000_000)],
+                        "hasNext": True,
+                        "nextCursor": "second-page",
+                    },
+                )
             case _:
                 pytest.fail(f"Unexpected broker request: {method}")
 
@@ -82,3 +91,35 @@ def test_iter_operations_rejects_repeated_cursor():
         client = TInvestClient(settings, http_client)
         with pytest.raises(ValueError, match="invalid operations cursor"):
             list(client.iter_operations("test-account", end - timedelta(days=7), end))
+
+
+def test_daily_valuations_keep_last_snapshot_by_moscow_date(tmp_path):
+    database = tmp_path / "journal.sqlite3"
+    captures = (
+        ("2026-11-24T20:30:00.000000+00:00", "950"),
+        ("2026-11-24T21:30:00.000000+00:00", "1000"),
+        ("2026-11-25T17:00:00.000000+00:00", "1010"),
+    )
+    with sqlite3.connect(database) as connection:
+        connection.executescript(SCHEMA)
+        for stamp, amount in captures:
+            snapshot = {
+                "accounts": [
+                    {
+                        "portfolio": {
+                            "totalAmountPortfolio": {
+                                "currency": "rub",
+                                "units": amount,
+                                "nano": 500_000_000,
+                            }
+                        }
+                    }
+                ],
+            }
+            connection.execute(
+                "INSERT INTO portfolio_snapshots VALUES (?, ?, ?)",
+                (stamp, captures[0][0], json.dumps(snapshot)),
+            )
+    values = daily_valuations(database, datetime(2026, 11, 24, tzinfo=UTC))["daily_valuations"]
+    assert values["2026-11-24"]["total_rub"] == Decimal("950.5")
+    assert values["2026-11-25"]["total_rub"] == Decimal("1010.5")

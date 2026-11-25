@@ -10,6 +10,8 @@ from sklearn.model_selection import TimeSeriesSplit
 
 from app.features import FEATURE_COLUMNS
 
+TARGET_VERSION = "next-session-open-v1"
+
 
 @dataclass
 class TrainingReport:
@@ -34,21 +36,34 @@ class GrowthModel:
         if y.nunique() < 2:
             raise ValueError("Training target contains only one class")
 
+        dates = ordered.loc[x.index, "date"]
+        sessions = dates.drop_duplicates().sort_values()
+        if len(sessions) < 5:
+            raise ValueError("At least five trading sessions are required for validation")
         splitter = TimeSeriesSplit(n_splits=4)
-        train_idx, validation_idx = list(splitter.split(x))[-1]
+        _, validation_days = list(splitter.split(sessions))[-1]
+        validation_start = sessions.iloc[validation_days[0]]
+        completed = ordered.get("exit_date", ordered["date"]).loc[x.index]
+        train_idx = x.index[dates.lt(validation_start) & completed.lt(validation_start)]
+        validation_idx = x.index[dates.ge(validation_start)]
+        if y.loc[train_idx].nunique() < 2:
+            raise ValueError("Training target before validation needs two classes")
         validation_model = self._new_model()
-        validation_model.fit(x.iloc[train_idx], y.iloc[train_idx])
-        prediction = validation_model.predict(x.iloc[validation_idx])
-        probability = validation_model.predict_proba(x.iloc[validation_idx])[:, 1]
-        accuracy = accuracy_score(y.iloc[validation_idx], prediction)
+        validation_model.fit(x.loc[train_idx], y.loc[train_idx])
+        prediction = validation_model.predict(x.loc[validation_idx])
+        probability = validation_model.predict_proba(x.loc[validation_idx])[:, 1]
+        accuracy = accuracy_score(y.loc[validation_idx], prediction)
         auc = None
-        if y.iloc[validation_idx].nunique() == 2:
-            auc = float(roc_auc_score(y.iloc[validation_idx], probability))
+        if y.loc[validation_idx].nunique() == 2:
+            auc = float(roc_auc_score(y.loc[validation_idx], probability))
 
         self.model = self._new_model()
         self.model.fit(x, y)
         self.model_path.parent.mkdir(parents=True, exist_ok=True)
-        joblib.dump({"model": self.model, "features": FEATURE_COLUMNS}, self.model_path)
+        joblib.dump(
+            {"model": self.model, "features": FEATURE_COLUMNS, "target_version": TARGET_VERSION},
+            self.model_path,
+        )
         report = TrainingReport(len(x), float(y.mean()), float(accuracy), auc, str(self.model_path))
         return asdict(report)
 
@@ -58,6 +73,8 @@ class GrowthModel:
         payload = joblib.load(self.model_path)
         if payload.get("features") != FEATURE_COLUMNS:
             raise ValueError("Stored model feature schema is incompatible")
+        if payload.get("target_version") != TARGET_VERSION:
+            return False
         self.model = payload["model"]
         return True
 
@@ -78,7 +95,8 @@ class GrowthModel:
         split_date = unique_dates[split_index]
         train_end_index = max(1, split_index - embargo_dates)
         train_end_date = unique_dates[train_end_index]
-        train = ordered[ordered["date"] < train_end_date]
+        completed = ordered.get("exit_date", ordered["date"])
+        train = ordered[ordered["date"].lt(train_end_date) & completed.lt(split_date)]
         test = ordered[ordered["date"] >= split_date].copy()
         if len(train) < 150 or len(test) < 30:
             raise ValueError("Not enough history for an out-of-sample backtest")

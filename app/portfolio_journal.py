@@ -3,20 +3,20 @@ import json
 import os
 import re
 import sqlite3
-import ssl
 import subprocess
-import sys
 from collections import defaultdict
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import httpx
 from pydantic import SecretStr
 
 from app.config import Settings
 from app.tinvest import TInvestClient
+from app.tls import system_verify
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS portfolio_snapshots (
@@ -132,7 +132,7 @@ def summarize_journal(database: Path, since: datetime) -> dict:
             payment = event.get("payment") or {}
             currency = payment.get("currency")
             if field and currency:
-                value = Decimal(payment.get("units", 0)) + Decimal(payment.get("nano", 0)).scaleb(-9)
+                value = money_value(payment)
                 totals[currency.upper()][field] += value
 
     for values in totals.values():
@@ -143,6 +143,38 @@ def summarize_journal(database: Path, since: datetime) -> dict:
         "last_sync_from": latest[1],
         "cash_flow_by_currency": totals,
     }
+
+
+def money_value(payment: dict) -> Decimal:
+    return Decimal(payment.get("units", 0)) + Decimal(payment.get("nano", 0)).scaleb(-9)
+
+
+def daily_valuations(database: Path, since: datetime) -> dict:
+    if not database.is_file():
+        raise ValueError("Journal is missing. Run sync first.")
+    moscow = ZoneInfo("Europe/Moscow")
+    days = {}
+    with closing(sqlite3.connect(f"{database.resolve().as_uri()}?mode=ro", uri=True)) as connection:
+        snapshots = connection.execute(
+            "SELECT captured_at, payload FROM portfolio_snapshots "
+            "WHERE captured_at >= ? ORDER BY captured_at",
+            (since.isoformat(timespec="microseconds"),),
+        )
+        for captured_at, payload in snapshots:
+            timestamp = datetime.fromisoformat(captured_at).astimezone(moscow)
+            accounts = json.loads(payload)["accounts"]
+            total = Decimal(0)
+            for account in accounts:
+                value = account["portfolio"].get("totalAmountPortfolio")
+                if not value or value.get("currency", "").lower() != "rub":
+                    raise ValueError("Daily valuations require RUB account totals")
+                total += money_value(value)
+            days[timestamp.date().isoformat()] = {
+                "captured_at_msk": timestamp.isoformat(timespec="seconds"),
+                "accounts": len(accounts),
+                "total_rub": total,
+            }
+    return {"daily_valuations": days}
 
 
 def read_token(service: str | None, account: str | None) -> SecretStr:
@@ -166,7 +198,7 @@ def read_token(service: str | None, account: str | None) -> SecretStr:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Sync T-Invest portfolio data into a local journal.")
-    parser.add_argument("command", choices=("sync", "summary"))
+    parser.add_argument("command", choices=("sync", "summary", "valuations"))
     parser.add_argument("--database", type=Path, default=Path("data/portfolio.sqlite3"))
     parser.add_argument("--days", type=int, default=365)
     parser.add_argument("--keychain-service")
@@ -180,6 +212,8 @@ def main() -> None:
     try:
         if args.command == "summary":
             result = summarize_journal(args.database, since)
+        elif args.command == "valuations":
+            result = daily_valuations(args.database, since)
         else:
             settings = Settings(
                 _env_file=None,
@@ -187,12 +221,7 @@ def main() -> None:
                 tinvest_sandbox=False,
                 allow_live_trading=False,
             )
-            verify = True
-            if sys.platform == "darwin":
-                import truststore
-
-                verify = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-            with httpx.Client(timeout=20, verify=verify) as transport:
+            with httpx.Client(timeout=20, verify=system_verify()) as transport:
                 result = sync_journal(TInvestClient(settings, transport), args.database, since, now)
     except httpx.HTTPStatusError as error:
         parser.exit(1, f"T-Invest returned HTTP {error.response.status_code}.\n")

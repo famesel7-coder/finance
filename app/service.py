@@ -1,3 +1,4 @@
+from app.backtest import maximum_drawdown, replay_ranked
 from app.config import Settings
 from app.data import MarketDataProvider
 from app.features import add_features, latest_rows, training_rows
@@ -108,35 +109,24 @@ class SignalService:
         rows = self.model.out_of_sample_predictions(
             training_rows(prepared), embargo_dates=self.settings.forecast_horizon_days
         )
-        dates = rows["date"].drop_duplicates().sort_values().tolist()
-        rebalance_dates = set(dates[:: self.settings.forecast_horizon_days])
-        rows = rows[rows["date"].isin(rebalance_dates)].copy()
-        rows["rank"] = rows.groupby("date")["probability"].rank(method="first", ascending=False)
-        selected = rows[rows["rank"] <= top_n].copy()
-        selected["net_return"] = (
-            selected["forward_return"] - self.settings.transaction_cost_bps / 10_000
-        )
-        periodic = selected.groupby("date")["net_return"].mean().dropna()
-        if periodic.empty:
-            raise ValueError("Backtest produced no trades")
-        equity = (1 + periodic).cumprod()
-        running_max = equity.cummax()
-        drawdown = equity / running_max - 1
-        periods_per_year = 252 / self.settings.forecast_horizon_days
-        annualized_return = equity.iloc[-1] ** (periods_per_year / len(periodic)) - 1
-        periodic_std = periodic.std(ddof=0)
-        annualized_volatility = periodic_std * periods_per_year**0.5
-        sharpe = periodic.mean() / periodic_std * periods_per_year**0.5 if periodic_std > 0 else 0
+        cost_bps = self.settings.transaction_cost_bps + self.settings.execution_spread_bps
+        equity, trades, windows = replay_ranked(market, rows, top_n, cost_bps)
+        daily = equity.pct_change().dropna()
+        daily_std = daily.std(ddof=0)
+        annualized_return = equity.iloc[-1] ** (252 / len(daily)) - 1
+        annualized_volatility = daily_std * 252**0.5
+        sharpe = daily.mean() / daily_std * 252**0.5 if daily_std > 0 else 0
         return {
-            "observations": len(periodic),
+            "observations": windows,
             "total_return": round(float(equity.iloc[-1] - 1), 4),
             "annualized_return": round(float(annualized_return), 4),
             "annualized_volatility": round(float(annualized_volatility), 4),
             "sharpe_ratio": round(float(sharpe), 4),
-            "average_trade_return": round(float(selected["net_return"].mean()), 4),
-            "win_rate": round(float((selected["net_return"] > 0).mean()), 4),
-            "max_drawdown": round(float(drawdown.min()), 4),
-            "note": "Chronological out-of-sample estimate with non-overlapping rebalance windows.",
+            "average_trade_return": round(sum(trades) / len(trades), 4),
+            "win_rate": round(sum(value > 0 for value in trades) / len(trades), 4),
+            "max_drawdown": round(maximum_drawdown(equity, 1.0), 4),
+            "round_trip_cost_bps": cost_bps,
+            "note": "Out-of-sample price replay using next-session opens and daily marks.",
         }
 
 
