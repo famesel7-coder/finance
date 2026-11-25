@@ -1,3 +1,5 @@
+from collections.abc import Iterator
+from datetime import datetime
 from uuid import uuid4
 
 import httpx
@@ -7,6 +9,7 @@ from app.config import Settings
 
 class TInvestClient:
     base_url = "https://invest-public-api.tbank.ru/rest"
+    contract = "tinkoff.public.invest.api.contract.v1"
 
     def __init__(self, settings: Settings, client: httpx.Client | None = None):
         self.settings = settings
@@ -30,14 +33,63 @@ class TInvestClient:
 
     def get_withdraw_limits(self) -> dict:
         method = (
-            "tinkoff.public.invest.api.contract.v1.SandboxService/GetSandboxWithdrawLimits"
+            "SandboxService/GetSandboxWithdrawLimits"
             if self.settings.tinvest_sandbox
-            else "tinkoff.public.invest.api.contract.v1.OperationsService/GetWithdrawLimits"
+            else "OperationsService/GetWithdrawLimits"
         )
         return self._post(
             method,
             {"accountId": self._account_id()},
         )
+
+    def list_accounts(self) -> list[dict]:
+        method = (
+            "SandboxService/GetSandboxAccounts"
+            if self.settings.tinvest_sandbox
+            else "UsersService/GetAccounts"
+        )
+        return self._post(method, {"status": "ACCOUNT_STATUS_OPEN"}).get("accounts", [])
+
+    def get_portfolio(self, account_id: str) -> dict:
+        method = (
+            "SandboxService/GetSandboxPortfolio"
+            if self.settings.tinvest_sandbox
+            else "OperationsService/GetPortfolio"
+        )
+        return self._post(method, {"accountId": account_id, "currency": "RUB"})
+
+    def get_instrument(self, identifier: str, id_type: str) -> dict:
+        return self._post(
+            "InstrumentsService/GetInstrumentBy",
+            {"id": identifier, "idType": id_type},
+        )["instrument"]
+
+    def iter_operations(
+        self, account_id: str, since: datetime, until: datetime
+    ) -> Iterator[dict]:
+        method = (
+            "SandboxService/GetSandboxOperationsByCursor"
+            if self.settings.tinvest_sandbox
+            else "OperationsService/GetOperationsByCursor"
+        )
+        payload = {
+            "accountId": account_id,
+            "from": since.isoformat(),
+            "to": until.isoformat(),
+            "state": "OPERATION_STATE_EXECUTED",
+            "limit": 500,
+        }
+        cursors = set()
+        while True:
+            result = self._post(method, payload)
+            yield from result.get("items", [])
+            if not result.get("hasNext"):
+                return
+            cursor = result.get("nextCursor")
+            if not cursor or cursor in cursors:
+                raise ValueError("T-Invest returned an invalid operations cursor")
+            cursors.add(cursor)
+            payload["cursor"] = cursor
 
     def preview_order(self, ticker: str, side: str, quantity_lots: int) -> dict:
         return {
@@ -71,15 +123,14 @@ class TInvestClient:
             "timeInForce": "TIME_IN_FORCE_DAY",
             "confirmMarginTrade": False,
         }
-        method = f"tinkoff.public.invest.api.contract.v1.{service}"
-        return self._post(method, payload)
+        return self._post(service, payload)
 
     def _post(self, method: str, payload: dict) -> dict:
-        if not self.configured:
+        if not self.settings.tinvest_token:
             raise ValueError("T-Invest token and account ID are not configured")
         token = self.settings.tinvest_token.get_secret_value()
         response = self.client.post(
-            f"{self.base_url}/{method}",
+            f"{self.base_url}/{self.contract}.{method}",
             json=payload,
             headers={"Authorization": f"Bearer {token}"},
         )
